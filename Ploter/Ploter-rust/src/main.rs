@@ -1,98 +1,210 @@
 use log::debug;
 use pretty_env_logger::env_logger;
 use regex::Regex;
+use serde_derive::Deserialize;
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::BufReader;
+use std::io::SeekFrom;
+
+#[derive(Deserialize, Debug)]
+struct Config {
+    extruder_regex: String,
+    replace_comment: String,
+    custom_commands: String,
+    t0_load: String,
+    t0_unload: String,
+    t1_load: String,
+    t1_unload: String,
+    t2_load: String,
+    t2_unload: String,
+    t3_load: String,
+    t3_unload: String,
+    t4_load: String,
+    t4_unload: String,
+    t5_load: String,
+    t5_unload: String,
+    t6_load: String,
+    t6_unload: String,
+    t7_load: String,
+    t7_unload: String,
+    t8_load: String,
+    t8_unload: String,
+}
 
 fn main() {
     env_logger::init();
 
-    // Read the config. it neads to be in the same directory. and the binary needs to be named Ploter-postscript
+    // Get the config path. it neads to be in the same directory as the binary.
     let mut config_path: String = String::new();
     match env::current_exe() {
         Ok(exe_path) => config_path = exe_path.display().to_string(),
         Err(e) => println!("failed to get current exe path: {}", e),
     }
-    config_path = config_path.replace("Ploter-postscript", "ploter.conf");
-    let config_file = File::open(config_path).unwrap();
-    let config_file = BufReader::new(&config_file);
-    let config_lines = config_file.lines();
-    // Declare the variables. If no one is found, make it 0
-    let mut x_home: String = String::from("0");
-    let mut y_home: String = String::from("0");
-    let mut z_home: String = String::from("0");
-
-    let mut x_move: String = String::from("0");
-    let mut y_move: String = String::from("0");
-    let mut z_move: String = String::from("0");
-
-    let mut regex: String = String::new();
-    let mut start_gcode_move: String = String::new();
-    let mut start_gcode_home: String = String::new();
-
-    // Ho through every line of the file
-    for line in config_lines {
-        let mut line_string: String = String::new();
-        match line {
-            Err(e) => line_string = String::from("#"),
-            Ok(r) => line_string = r,
-        }
-        if line_string == "" {
-            line_string = String::from("#");
-        }
-        let if_comment = line_string.chars().nth(0).unwrap().to_string();
-        // If the line is a comment ( or empty ), ignore it
-        if if_comment != "#" {
-            if line_string.contains("Plotter_X_Move:") {
-                x_move = line_string.replace("Plotter_X_Move:", "");
-            }
-            if line_string.contains("Plotter_Y_Move:") {
-                y_move = line_string.replace("Plotter_Y_Move:", "");
-            }
-            if line_string.contains("Plotter_Z_Move:") {
-                z_move = line_string.replace("Plotter_Z_Move:", "");
-            }
-            if line_string.contains("Plotter_X_Home:") {
-                x_home = line_string.replace("Plotter_X_Home:", "");
-            }
-            if line_string.contains("Plotter_Y_Home:") {
-                y_home = line_string.replace("Plotter_Y_Home:", "");
-            }
-            if line_string.contains("Plotter_Z_Home:") {
-                z_home = line_string.replace("Plotter_Z_Home:", "");
-            }
-            if line_string.contains("Extruder_Regex:") {
-                regex = line_string.replace("Extruder_Regex:", "");
-            }
-            if line_string.contains("Starting_Gcode_Move:") {
-                start_gcode_move = line_string.replace("Starting_Gcode_Move:", "");
-            }
-            if line_string.contains("Starting_Gcode_Home:") {
-                start_gcode_home = line_string.replace("Starting_Gcode_Home:", "");
-            }
-        }
-    }
-    // Calculate the move_commands
-    let move_command = format!("G1 X{} Y{} Z{}", x_move, y_move, z_move);
-    let home_command = format!("G92 X{} Y{} Z{}", x_home, y_home, z_home);
+    let regex = Regex::new(&String::from(r"[A-Za-z0-9_?\-\.][A-Za-z0-9?.?-]+$")).unwrap();
+    let config_path = regex.replace_all(&config_path, "ploter.conf").to_string();
+    // Read the config, parse it to toml
+    let mut config_file = File::open(config_path).unwrap();
+    let mut config_file_string: String = String::new();
+    config_file.read_to_string(&mut config_file_string).unwrap();
+    let config_file_toml: Config = toml::from_str(&config_file_string).unwrap();
 
     // Get the information from slicer
     let arguments: Vec<String> = env::args().collect();
     let path_gcode = arguments[1].clone();
-    // Open the file
+
+    // Open the gcode file
     let mut gcode_file = File::open(&path_gcode).unwrap();
+    gcode_file.seek(SeekFrom::Start(0)).unwrap();
     let mut gcode_data = String::new();
-    gcode_file.read_to_string(&mut gcode_data);
+    gcode_file.read_to_string(&mut gcode_data); // Makes that all ascii characters are seen, like \n
     drop(gcode_file); // Close the file early
-    let gcode_data = gcode_data.replacen(&start_gcode_move, &move_command, 1);
-    let gcode_data = gcode_data.replacen(&start_gcode_home, &home_command, 1);
 
-    let regex = Regex::new(&regex).unwrap();
-    let gcode_data = regex.replace_all(&gcode_data, "");
-    debug!("{}", gcode_data);
+    // Replace custom comment with custom commands
+    let gcode_data = gcode_data.replacen(
+        &config_file_toml.replace_comment,
+        &config_file_toml.custom_commands,
+        1,
+    );
 
-    let mut dst = File::create(&path_gcode).unwrap();
-    dst.write(gcode_data.as_bytes()).unwrap();
+    // Delete all things that the regex points to
+    let regex = Regex::new(&config_file_toml.extruder_regex).unwrap();
+    let gcode_data = regex.replace_all(&gcode_data, "").to_string();
+    let gcode_data_split = gcode_data.split("\n");
+    
+    // Manage multicolor tool changing
+    let mut gcode_data_push: String = String::new();
+    let mut first_change: bool = true;
+    let mut previous_change: i32 = 0;
+    for line_string in gcode_data_split {
+        gcode_data_push.push_str(&manage_tool(
+            line_string,
+            &mut first_change,
+            &mut previous_change,
+            &config_file_toml,
+        ));
+    }
+
+    // Save the file
+    let mut file_write = File::create(&path_gcode).unwrap();
+    file_write.write(gcode_data_push.as_bytes()).unwrap();
+}
+
+fn manage_tool(
+    line_string: &str,
+    first_change: &mut bool,
+    previous_change: &mut i32,
+    config_file_toml: &Config,
+) -> String {
+    let mut line_string_edited: String = String::new();
+    if line_string.contains("T0 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t0_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t0_load.clone());
+        }
+        *previous_change = 0;
+    } else if line_string.contains("T2 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t1_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t1_load.clone());
+        }
+        *previous_change = 1;
+    } else if line_string.contains("T1 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t2_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t2_load.clone());
+        }
+        *previous_change = 2;
+    } else if line_string.contains("T3 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t3_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t3_load.clone());
+        }
+        *previous_change = 3;
+    } else if line_string.contains("T4 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t4_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t4_load.clone());
+        }
+        *previous_change = 4;
+    } else if line_string.contains("T5 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t5_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t5_load.clone());
+        }
+        *previous_change = 5;
+    } else if line_string.contains("T6 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t6_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t6_load.clone());
+        }
+        *previous_change = 6;
+    } else if line_string.contains("T7 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t7_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t7_load.clone());
+        }
+        *previous_change = 7;
+    } else if line_string.contains("T8 ; change extruder") {
+        if first_change == &true {
+            *first_change = false;
+            line_string_edited = config_file_toml.t8_load.clone();
+        } else {
+            line_string_edited = previous_unload_return(previous_change, config_file_toml);
+            line_string_edited.push_str(&config_file_toml.t8_load.clone());
+        }
+        *previous_change = 8;
+    } else {
+        line_string_edited.push_str(line_string);
+        line_string_edited.push_str("\n");
+    }
+    line_string_edited
+}
+
+fn previous_unload_return(previous_change: &mut i32, config_file_toml: &Config) -> String {
+    if previous_change == &0 {
+        config_file_toml.t0_unload.clone()
+    } else if previous_change == &1 {
+        config_file_toml.t1_unload.clone()
+    } else if previous_change == &2 {
+        config_file_toml.t2_unload.clone()
+    } else if previous_change == &3 {
+        config_file_toml.t3_unload.clone()
+    } else if previous_change == &4 {
+        config_file_toml.t4_unload.clone()
+    } else if previous_change == &5 {
+        config_file_toml.t5_unload.clone()
+    } else if previous_change == &6 {
+        config_file_toml.t6_unload.clone()
+    } else if previous_change == &7 {
+        config_file_toml.t7_unload.clone()
+    } else if previous_change == &8 {
+        config_file_toml.t8_unload.clone()
+    } else {
+        String::from("PAUSE\n")
+    }
 }
