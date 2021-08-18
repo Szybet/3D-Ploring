@@ -71,7 +71,7 @@ fn main() {
     let regex = Regex::new(&config_file_toml.extruder_regex).unwrap();
     let gcode_data = regex.replace_all(&gcode_data, "").to_string();
     let gcode_data_split = gcode_data.split("\n");
-    
+
     // Manage multicolor tool changing
     let mut gcode_data_push: String = String::new();
     let mut first_change: bool = true;
@@ -106,7 +106,7 @@ fn manage_tool(
             line_string_edited.push_str(&config_file_toml.t0_load.clone());
         }
         *previous_change = 0;
-    } else if line_string.contains("T2 ; change extruder") {
+    } else if line_string.contains("T1 ; change extruder") {
         if first_change == &true {
             *first_change = false;
             line_string_edited = config_file_toml.t1_load.clone();
@@ -115,7 +115,7 @@ fn manage_tool(
             line_string_edited.push_str(&config_file_toml.t1_load.clone());
         }
         *previous_change = 1;
-    } else if line_string.contains("T1 ; change extruder") {
+    } else if line_string.contains("T2 ; change extruder") {
         if first_change == &true {
             *first_change = false;
             line_string_edited = config_file_toml.t2_load.clone();
